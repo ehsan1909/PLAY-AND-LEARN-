@@ -283,6 +283,7 @@ public class MainActivity extends Activity implements RecognitionListener {
             recognizer = (g != null)
                     ? new Recognizer(model, 16000.0f, g)
                     : new Recognizer(model, 16000.0f);
+            recognizer.setMaxAlternatives(ACCEPT_TOP_N);
             speechService = new SpeechService(recognizer, 16000.0f);
             listening = true;
             sendStatus("در حال گوش دادن؛ حالا واژه را تلفظ کن...");
@@ -347,15 +348,46 @@ public class MainActivity extends Activity implements RecognitionListener {
     private static final java.util.Set<String> FILLERS = new java.util.HashSet<>(java.util.Arrays.asList(
             "the", "a", "uh", "um", "huh", "oh", "hmm", "mm", "eh", "ah"));
 
+    /** 1 = خیلی سخت‌گیر (فقط بهترین حدس)، 2 = متعادل (پیشنهادی)، 3 = راحت‌تر. */
+    private static final int ACCEPT_TOP_N = 2;
+    /** تعداد واژه‌های شبیه در فهرست تشخیص: بیشتر = سخت‌گیرتر. */
+    private static final int MAX_NEIGHBORS = 30;
+
     private String extractText(String json) {
         try {
-            String t = new JSONObject(json).optString("text", "").trim();
-            boolean onlyFiller = true;
-            for (String p : t.toLowerCase().split("\\s+")) {
-                if (!p.isEmpty() && !FILLERS.contains(p)) onlyFiller = false;
+            JSONObject o = new JSONObject(json);
+            org.json.JSONArray alts = o.optJSONArray("alternatives");
+            if (alts == null) return cleanFiller(o.optString("text", "").trim());
+            String first = "";
+            for (int i = 0; i < alts.length() && i < ACCEPT_TOP_N; i++) {
+                String t = cleanFiller(alts.getJSONObject(i).optString("text", "").trim());
+                if (t.isEmpty()) continue;
+                if (first.isEmpty()) first = t;
+                if (matchesTarget(t)) return pendingWord;   // واژه‌ی هدف بین حدس‌های برتر است
             }
-            return onlyFiller ? "" : t;
+            return first;
         } catch (Exception e) { return ""; }
+    }
+
+    private String cleanFiller(String t) {
+        boolean onlyFiller = true;
+        for (String p : t.toLowerCase().split("\\s+")) {
+            if (!p.isEmpty() && !FILLERS.contains(p)) onlyFiller = false;
+        }
+        return onlyFiller ? "" : t;
+    }
+
+    private boolean matchesTarget(String heard) {
+        if (pendingWord == null) return false;
+        java.util.List<String> h = java.util.Arrays.asList(
+                heard.toLowerCase().replaceAll("[^a-z' ]", " ").trim().split("\\s+"));
+        for (String part : pendingWord.split("/")) {
+            String[] w = part.toLowerCase().replaceAll("[^a-z' ]", " ").trim().split("\\s+");
+            boolean all = w.length > 0 && !w[0].isEmpty();
+            for (String t : w) if (!h.contains(t)) { all = false; break; }
+            if (all) return true;
+        }
+        return false;
     }
 
     private static int editDistance(String a, String b) {
@@ -394,7 +426,7 @@ public class MainActivity extends Activity implements RecognitionListener {
             java.util.Collections.sort(found, (x, y) -> x[1].compareTo(y[1]));
             org.json.JSONArray arr = new org.json.JSONArray();
             arr.put(w);
-            for (int i = 0; i < found.size() && i < 40; i++) arr.put(found.get(i)[0]);
+            for (int i = 0; i < found.size() && i < MAX_NEIGHBORS; i++) arr.put(found.get(i)[0]);
             arr.put("[unk]");
             return arr.toString();
         } catch (Exception e) { return null; }
