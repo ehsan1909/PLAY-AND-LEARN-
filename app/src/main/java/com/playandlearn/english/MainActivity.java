@@ -247,7 +247,7 @@ public class MainActivity extends Activity implements RecognitionListener {
 
         private void begin(String word, String grammar) {
             pendingWord = word == null ? "" : word.trim();
-            pendingGrammar = (grammar == null || grammar.trim().isEmpty()) ? null : grammar;
+            pendingGrammar = null;
             runOnUiThread(() -> {
                 if (pendingWord.isEmpty()) { sendError("واژه‌ای برای تشخیص دریافت نشد."); return; }
                 if (Build.VERSION.SDK_INT >= 23
