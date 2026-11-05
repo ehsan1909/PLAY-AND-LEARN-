@@ -247,7 +247,7 @@ public class MainActivity extends Activity implements RecognitionListener {
 
         private void begin(String word, String grammar) {
             pendingWord = word == null ? "" : word.trim();
-            pendingGrammar = null;
+            pendingGrammar = (grammar == null || grammar.trim().isEmpty()) ? null : grammar;
             runOnUiThread(() -> {
                 if (pendingWord.isEmpty()) { sendError("واژه‌ای برای تشخیص دریافت نشد."); return; }
                 if (Build.VERSION.SDK_INT >= 23
@@ -279,8 +279,9 @@ public class MainActivity extends Activity implements RecognitionListener {
         partialSent = false;
         try {
             // اگر فهرست واژه‌های درس رسیده باشد، تشخیص فقط بین همان واژه‌ها انجام می‌شود (دقت بیشتر).
-            recognizer = (pendingGrammar != null)
-                    ? new Recognizer(model, 16000.0f, pendingGrammar)
+            String g = neighborGrammar(pendingWord);
+            recognizer = (g != null)
+                    ? new Recognizer(model, 16000.0f, g)
                     : new Recognizer(model, 16000.0f);
             speechService = new SpeechService(recognizer, 16000.0f);
             listening = true;
@@ -342,9 +343,61 @@ public class MainActivity extends Activity implements RecognitionListener {
         sendError("خطا در تشخیص صدا: " + (e == null ? "نامشخص" : e.getMessage()));
     }
 
+    // خروجی‌هایی که فقط «پر‌کننده» هستند (مثل the که موتور برای نویز می‌دهد) نادیده گرفته می‌شوند.
+    private static final java.util.Set<String> FILLERS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "the", "a", "uh", "um", "huh", "oh", "hmm", "mm", "eh", "ah"));
+
     private String extractText(String json) {
-        try { return new JSONObject(json).optString("text", "").trim(); }
-        catch (Exception e) { return ""; }
+        try {
+            String t = new JSONObject(json).optString("text", "").trim();
+            boolean onlyFiller = true;
+            for (String p : t.toLowerCase().split("\\s+")) {
+                if (!p.isEmpty() && !FILLERS.contains(p)) onlyFiller = false;
+            }
+            return onlyFiller ? "" : t;
+        } catch (Exception e) { return ""; }
+    }
+
+    private static int editDistance(String a, String b) {
+        int[] prev = new int[b.length() + 1], cur = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) prev[j] = j;
+        for (int i = 1; i <= a.length(); i++) {
+            cur[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                cur[j] = Math.min(Math.min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            int[] t = prev; prev = cur; cur = t;
+        }
+        return prev[b.length()];
+    }
+
+    /** گرامر محدود: واژه‌ی هدف + تا ۴۰ واژه‌ی شبیه به آن از فهرست خود مدل + [unk]. */
+    private String neighborGrammar(String word) {
+        try {
+            if (word == null || word.contains(" ") || word.contains("/")) return null;
+            final String w = word.toLowerCase().replaceAll("[^a-z']", "");
+            if (w.length() < 2) return null;
+            java.io.File f = new java.io.File(getExternalFilesDir(null), "vosk-model/graph/words.txt");
+            if (!f.exists()) return null;
+            java.util.List<String[]> found = new java.util.ArrayList<>();
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(f))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    int sp = line.indexOf(' ');
+                    String c = sp > 0 ? line.substring(0, sp) : line;
+                    if (c.equals(w) || !c.matches("[a-z']{2,}") || Math.abs(c.length() - w.length()) > 2) continue;
+                    int d = editDistance(c, w);
+                    if (d <= 2) found.add(new String[]{c, String.valueOf(d)});
+                }
+            }
+            java.util.Collections.sort(found, (x, y) -> x[1].compareTo(y[1]));
+            org.json.JSONArray arr = new org.json.JSONArray();
+            arr.put(w);
+            for (int i = 0; i < found.size() && i < 40; i++) arr.put(found.get(i)[0]);
+            arr.put("[unk]");
+            return arr.toString();
+        } catch (Exception e) { return null; }
     }
 
     private void finishWithResult(String text) {
